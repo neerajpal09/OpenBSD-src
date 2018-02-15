@@ -47,6 +47,7 @@
 #include <uvm/uvm_extern.h>
 #include <sys/sched.h>
 #include <sys/timeout.h>
+#include <sys/pledge.h>         /* for PLEDGE_* macros definitions */
 
 #ifdef KTRACE
 #include <sys/ktrace.h>
@@ -217,6 +218,17 @@ schedcpu(void *arg)
 	KASSERT(phz);
 
 	LIST_FOREACH(p, &allproc, p_list) {
+
+						/* below code to print process info */
+		if (p->p_p->ps_pledge) {
+			
+			if ((p->p_p->ps_pledge & PLEDGE_STDIO) > 1) {
+				printf("total cpus: %d process prio: %5d cpuid: %5d pid: %10d pledge_xbit: %10llx io bound\n",ncpus,p->p_priority,p->p_cpu->ci_cpuid,p->p_p->ps_pid,p->p_p->ps_pledge);
+			}
+			else {
+				printf("total cpus: %d process prio: %5d cpuid: %5d pid: %10d pledge_xbit: %10llx io bound\n",ncpus,p->p_priority,p->p_cpu->ci_cpuid,p->p_p->ps_pid,p->p_p->ps_pledge);
+			}
+		}
 		/*
 		 * Increment sleep time (if sleeping). We ignore overflow.
 		 */
