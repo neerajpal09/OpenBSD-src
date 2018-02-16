@@ -26,6 +26,8 @@
 #include <sys/mutex.h>
 #include <sys/task.h>
 
+#include <sys/pledge.h>
+
 #include <uvm/uvm_extern.h>
 
 void sched_kthreads_create(void *);
@@ -143,6 +145,16 @@ sched_idle(void *v)
 	atomic_setbits_int(&p->p_flag, P_CPUPEG);
 	mi_switch();
 	cpuset_del(&sched_idle_cpus, ci);
+
+	/*
+	if (unknown)
+	 	--(spc->pledge_unknown_ps_count);
+	else if (io)
+	 	--(spc->pledge_io_ps_count);
+	else
+	 	--(spc->pledge_cpu_ps_count);
+	 */
+
 	SCHED_UNLOCK(s);
 
 	KASSERT(ci == curcpu());
@@ -238,6 +250,16 @@ setrunqueue(struct proc *p)
 	SCHED_ASSERT_LOCKED();
 	spc = &p->p_cpu->ci_schedstate;
 	spc->spc_nrun++;
+
+	/*
+	if (unknown)
+	 	++(spc->pledge_unknown_ps_count);
+	else if (io)
+	 	++(spc->pledge_io_ps_count);
+	else
+	 	++(spc->pledge_cpu_ps_count);
+	
+	 */
 
 	TAILQ_INSERT_TAIL(&spc->spc_qs[queue], p, p_runq);
 	spc->spc_whichqs |= (1 << queue);
@@ -389,10 +411,16 @@ struct cpu_info *
 sched_choosecpu(struct proc *p)
 {
 #ifdef MULTIPROCESSOR
+	
 	struct cpu_info *choice = NULL;
+	int min_ps_count = 0;
+	struct cpu_info *pledge_choice = NULL;
 	int last_cost = INT_MAX;
 	struct cpu_info *ci;
 	struct cpuset set;
+
+	struct cpu_info *ci1;
+	struct cpuset set1;
 
 	/*
 	 * If pegged to a cpu, don't allow it to move.
@@ -408,8 +436,8 @@ sched_choosecpu(struct proc *p)
 	 * (idle + queued could mean that the cpu is handling an interrupt
 	 * at this moment and haven't had time to leave idle yet).
 	 */
-	cpuset_complement(&set, &sched_queued_cpus, &sched_idle_cpus);
-	cpuset_intersection(&set, &set, &sched_all_cpus);
+	cpuset_complement(&set1, &sched_queued_cpus, &sched_idle_cpus);
+	cpuset_intersection(&set1, &set1, &sched_all_cpus);
 
 	/*
 	 * First, just check if our current cpu is in that set, if it is,
@@ -417,6 +445,55 @@ sched_choosecpu(struct proc *p)
 	 * Also, our cpu might not be idle, but if it's the current cpu
 	 * and it has nothing else queued and we're curproc, take it.
 	 */
+	
+
+
+	if (cpuset_first(&set1) == NULL)
+		cpuset_copy(&set1, &sched_all_cpus);
+	
+	if (p->p_p->ps_pledge == 0 || p->p_p->ps_pledge == 0x8009588f)
+	{
+		while ((ci1 = cpuset_first(&set1)) != NULL) {
+			if (min_ps_count > ci1->ci_schedstate.pledge_unknown_ps_count) {
+				min_ps_count = ci1->ci_schedstate.pledge_unknown_ps_count; 
+				pledge_choice = ci1;
+			}
+			cpuset_del(&set1, ci1);
+		}
+	}
+	/* I will change PLEDGE_* macros later */	
+	else if ((p->p_p->ps_pledge & (
+				       PLEDGE_STDIO | 
+				       PLEDGE_STDIO | 
+				       PLEDGE_STDIO | 
+				       PLEDGE_STDIO | 
+				       PLEDGE_STDIO | 
+				       PLEDGE_STDIO 
+				       )) > 0 
+	) {
+		while ((ci1 = cpuset_first(&set1)) != NULL) {
+			if (min_ps_count > ci1->ci_schedstate.pledge_io_ps_count) {
+				min_ps_count = ci1->ci_schedstate.pledge_io_ps_count; 
+				pledge_choice = ci1;
+			}
+			cpuset_del(&set1, ci1);
+		}
+	}
+	else
+	{
+		while ((ci1 = cpuset_first(&set1)) != NULL) {
+			if (min_ps_count > ci1->ci_schedstate.pledge_cpu_ps_count) {
+				min_ps_count = ci1->ci_schedstate.pledge_cpu_ps_count; 
+				pledge_choice = ci1;
+			}
+			cpuset_del(&set1, ci1);
+		}
+
+	}
+
+	cpuset_complement(&set, &sched_queued_cpus, &sched_idle_cpus);
+	cpuset_intersection(&set, &set, &sched_all_cpus);
+
 	if (cpuset_isset(&set, p->p_cpu) ||
 	    (p->p_cpu == curcpu() && p->p_cpu->ci_schedstate.spc_nrun == 0 &&
 	    (p->p_cpu->ci_schedstate.spc_schedflags & SPCF_SHOULDHALT) == 0 &&
@@ -442,6 +519,10 @@ sched_choosecpu(struct proc *p)
 		sched_nmigrations++;
 	else
 		sched_nomigrations++;
+
+	//p->our_choice = pledge_choice->ci_cpuid;
+	//p->choice = choice->ci_cpuid;
+	//printf("pledge = %d, choice = %d\n",pledge_choice->ci_cpuid,choice->ci_cpuid);
 
 	return (choice);
 #else
